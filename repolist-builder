@@ -1,0 +1,645 @@
+#!/bin/bash
+
+# Variabel.
+PROG=${0##*/}
+PROG_=${0##*/}:
+PROG_LEN=${#PROG_} 
+TMP_FILE=""
+VERSION="0.1.0"
+
+DIR_CURRENT=$(pwd)
+DIR_PROG=$(basename $0)
+OUT_FILE="$DIR_CURRENT/$PROG.repo.list"
+RELEASE_CODE=$(lsb_release -sc)
+ARCH=$(uname -m)
+BAR_MAX=$(tput cols)
+
+LIST_URL="http://mirrors.ubuntu.com/mirrors.txt"
+CHECK_RELEASE="dists/$RELEASE_CODE/Release.gpg"
+TIMED_OUT=3
+
+## REPOSITORIES_COMPONENTS 
+## Main - Perangkat lunak resmi terdukung.
+## Restricted - Perangkat lunak terdukung yang tidak sepenuhnya berlisensi bebas.
+## Universe - Perangkat lunak yang dirawat komunitas, maksudnya perangkat lunak
+##     tak terdukung resmi.
+## Multiverse - Perangkat lunak yang tidak bebas. 
+REPOSITORIES_COMPONENTS=(main multiverse restricted universe)
+
+## RELEASE_TYPE
+## "Important Security Updates (raring-security)". Patches for security vulnerabilities
+##     in Ubuntu packages. They are managed by the Ubuntu Security Team and are designed
+##     to change the behavior of the package as little as possible -- in fact,
+##     the minimum required to resolve the security problem. As a result, they tend
+##     to be very low-risk to apply and all users are urged to apply security updates.
+## "Recommended Updates (raring-updates)". Updates for serious bugs in Ubuntu packaging
+##     that do not affect the security of the system.
+## "Pre-released Updates (raring-proposed)". The testing area for updates. This
+##     repository is recommended only to those interested in helping to test updates
+##     and provide feedback.
+## "Unsupported Updates (raring-backports)". As the name states, these are unsupported
+##     new versions of packages which have been backported to an older release.
+##     Packages may contain new features, may introduce new interfaces, and bugs. 
+RELEASE_TYPE=(updates security proposed backports)
+CHECK_SOURCE=source/Release
+
+# Mengganti aarsitektur.
+if [ $ARCH == "x86_64" ]
+then
+	ARCH="amd64"
+else
+	ARCH="amd64"
+fi
+
+# Membangun cek uri.
+RELEASE_TYPE_URI=($RELEASE_CODE)
+for i in ${RELEASE_TYPE[@]}
+do
+	RELEASE_TYPE_URI=("$RELEASE_TYPE_URI ${RELEASE_CODE}-${i}")
+done
+RELEASE_TYPE_URI_LEN=0
+for i in ${RELEASE_TYPE_URI[@]}
+do
+	RELEASE_TYPE_URI_LEN=$(($RELEASE_TYPE_URI_LEN+1))
+done
+
+# Membangun cek biber arch
+CHECK_ARCH=binary-${ARCH}/Packages
+
+TEST=0
+QUIET=0
+
+# Tampilan-tampilan pesan.
+echo_e (){
+	if [ $QUIET -ne 1 ];
+	then
+		echo "$PROG_ [GALAT] $1"
+	else
+		echo "# $PROG_ [GALAT] $1"
+	fi
+}
+echo_v(){
+	if [ $QUIET -ne 1 ];
+	then
+		echo "$1"
+	fi
+}
+echo_h(){
+	if [ $QUIET -ne 1 ];
+	then
+		echo -n "$1"
+	fi
+}
+echo_n (){
+	echo_v "$PROG_ $1"
+}
+echo_w (){
+	echo_v "$PROG_ [PERINGATAN] $1"
+}
+
+echo_ne(){
+	if [ $QUIET -ne 1 ];
+	then
+		echo -ne "$1"
+	fi
+}
+
+echo_1l(){
+	if [ $QUIET -ne 1 ];
+	then
+		local string=$1
+		local panjang=$2
+		
+		# String
+		if [ -z $string ]
+		then
+			string=" "
+		fi
+		
+		# Panjang
+		if [ -z $panjang ]
+		then
+			panjang=1
+		fi
+		
+		# Tampilan
+		for (( i=0; i<$panjang; i++ ));
+		do
+			echo_ne "$string"
+		done
+	fi
+}
+
+# Bantuan.
+do_help() {
+cat << AKHIR
+$PROG $VERSION adalah pembangun daftar repositori Ubuntu.
+Gunakan: $PROG [-h] [-o OUTFILE]...
+
+Argumen wajib untuk opsi panjang juga wajib untuk opsi pendek.
+
+Dasar:
+   -h  --help               menampilkan bantuan ini dan keluar.
+   -o  --outfile OUTFILE    menulis ke berkas OUTFILE ketimbang keluaran standard.
+   -T  --timedout SECONDS   batas waktu menunggu selama SECONDS detik.
+   -t  --test               tidak menulis berkas apapun
+                            dan hasil ditampilkan ke layar.
+   -p  --proposal           menampilkan rencana pilihan menu atau pengaturan
+                            mendatang dan keluar.
+   -v  --version            menunjukkan versi dan keluar.
+
+Laporkan kekutu dan saran kepada bug@yuah.web.id
+AKHIR
+exit 0;
+}
+
+do_help_proposal(){
+cat << AKHIR
+$PROG $VERSION adalah pembangun daftar repositori Ubuntu.
+Gunakan: $PROG [-h] [-o OUTFILE]...
+
+Rencana Menu (Belum dibuat).
+Terakhir ditambahkan pada Kamis, 16 Oktober 2014.
+
+Pemilihan:
+   -A   --all-component     menyertakan semua komponen repositori,
+                            yakni main (m/M), multiverse (t/T), restricted (r/R),
+                            dan universe (v/V).
+   -a   --all-type          menyertakan semua jenis repositori,
+                            yakni updates (u/U), security (s/S), proposed (p/P),
+                            dan backports (b/B).
+   -i   --include COMPONENT1,COMPONENT2  hanya menyertakan komponen
+                                         dan tipe terpilih.
+   -N   --no-X              kecuali komponen dan tipe terpilih.
+
+Laporkan kekutu dan saran kepada bug@yuah.web.id
+AKHIR
+exit 0;
+}
+
+do_show_version(){
+cat << AKHIR
+$PROG versi $VERSION
+
+"THE COFFEE-WARE" (Revision 1991)
+
+Kamis, 16 Oktober 2014, 10:08:46 UTC+7
+<b@yuah.web.id> menulis perangkat lunak REPOLIST-BUILDER. Selama
+kamu menemui catatan ini bersama dengan distribusi karya ini, kamu dapat
+melakukan apapun terhadap karya ini. Bila kita bertemu suatu hari, dan kamu
+merasa karya ini berharga, kamu bisa membelikan aku secangkir kopi sebagai
+imbalan kepada Bayu Aditya Herlambang. Bila bertanya mengapa ini seperti
+"THE BEER-WARE LICENSE", sebab BEER adalah haram bagi kami.
+ 
+Laporkan kekutu dan saran kepada bug@yuah.web.id
+AKHIR
+exit 0;
+}
+
+# show_time
+# Original Author: choroba (http://stackoverflow.com/users/1030675)
+# URL: http://stackoverflow.com/a/12199816/1705800
+function show_time() {
+	local num=$1
+	local min=0
+	local hour=0
+	local day=0
+	if((num>59));then
+		((sec=num%60))
+		((num=num/60))
+		if((num>59));then
+			((min=num%60))
+			((num=num/60))
+			if((num>23));then
+				((hour=num%24))
+				((day=num/24))
+			else
+				((hour=num))
+			fi
+		else
+			((min=num))
+		fi
+	else
+		((sec=num))
+	fi
+	
+	if [ $day -ne 0 ];then echo_ne "${day} hari "; fi
+	if [ $hour -ne 0 ];then echo_ne "${hour} jam "; fi
+	if [ $min -ne 0 ];then echo_ne "${min} menit "; fi
+	if [ $sec -ne 0 ];then echo_ne "${sec} detik "; fi
+	
+}
+
+# Memeriksa berkas sementara.
+do_testtmp(){
+	if [[ ! -e $TMP_FILE ]]
+	then
+		echo_e "Berkas sementara $TMP_FILE tidak ditemukan."
+	else
+		if [[ ! -w $TMP_FILE ]]
+		then
+			echo_e "Berkas sementara $TMP_FILE gagal diakses."
+		else
+			echo 1
+		fi
+	fi
+}
+
+# Membuat berkas sementara.
+do_mktmp() {
+	echo_n "Membuat berkas sementara..."
+	TMP_FILE=$(mktemp -t "repobuilt_XXXXXXXXXXX")
+	if [[ "1" -ne $(do_testtmp) ]]
+	then
+		echo_e "Berkas sementara $TMP_FILE gagal dibuat."
+	else
+		echo_n "Berhasil membuat berkas sementara"
+	fi
+	trap "rm -rf $TMP_FILE" exit 
+}
+
+# Membersihkan berkas sementara.
+do_cleantmp() {
+	if [[ "1" -ne $(do_testtmp) ]]
+	then
+		echo_e "Berkas sementara $TMP_FILE tidak ditemukan."
+	else
+		echo_n "Membersihkan berkas sementara..."
+		cat /dev/null > $TMP_FILE
+		echo_n "Berhasil membersihkan berkas sementara"
+	fi
+}
+
+# Menghapus berkas sementara.
+do_rmtmp() {
+	if [[ "1" -ne $(do_testtmp) ]]
+	then
+		echo_e "Berkas sementara $TMP_FILE tidak ditemukan."
+	else
+		echo_n "Menghapus berkas sementara..."
+		rm -fr $TMP_FILE
+		echo_n "Berhasil menghapus berkas sementara"
+	fi
+}
+
+# Memeriksa kode keluar wget 
+check_wget_code(){
+	local code=$1
+	case "$code" in
+	0)
+		echo_n "Tidak ditemukan kesalahan.";
+		;;
+	1)
+		echo_e "Kode kesalahan umum.";
+		;;
+	2)
+		echo_e "Gagal memecah perintah.";
+		;;
+	3)
+		echo_e "Kesalahan I/O.";
+		;;
+	4)
+		echo_e "Kesalahan jaringan.";
+		;;
+	5)
+		echo_e "Kesalahan sertifikat SSL.";
+		;;
+	6)
+		echo_e "Pengenal nama/sandi salah.";
+		;;
+	7)
+		echo_e "Galat protokol.";
+		;;
+	8)
+		echo_e "Peladen mengeluarkan kode kesalahan.";
+		;;
+	*)
+		echo_e "Kelalahan tidak diketahui.";
+		;;
+	esac
+}
+
+# Wget.
+do_wget(){
+	do_cleantmp;
+	echo_n "Mendapatkan $1..."
+	wget \
+		--quiet \
+		--content-disposition \
+		--timeout $TIMED_OUT \
+		--output-document $TMP_FILE \
+		--random-wait \
+		$1
+	local wget_status=$(echo $?)
+	
+	# Memeriksa status
+	if [ $wget_status -ne 0 ]
+	then
+		echo_e "Kesalahan dalam mengunduh $1.";
+		echo_e "Kode kesalahan: WGET_$wget_status";
+		check_wget_code $wget_status;
+		exit 2;
+	fi
+}
+
+# Mendapat daftar.
+do_getlist(){
+	do_wget $LIST_URL
+}
+
+do_testrepo(){
+	if [[ "1" -ne $(do_testtmp) ]]
+	then
+		echo_e "Gagal membuka berkas sementara $TMP_FILE."
+	else
+		local check_count=$(($RELEASE_TYPE_URI_LEN * ${#REPOSITORIES_COMPONENTS[@]}))
+		local check_count_len=${#check_count}
+		
+		# Mulai.
+		local tmp_test=$(mktemp -t "repobuilt_test_XXXXXXXXXXX")
+		while IFS=, read url
+		do
+			echo_n "Memeriksa url $url..."
+			if curl --output /dev/null --silent --connect-timeout $TIMED_OUT --head --fail "$url$CHECK_RELEASE"
+				then
+				local ada=""
+				local tmp_str=""
+				local check_i=0
+				local domain_name=$(echo $url | awk -F/ '{print $3}')
+				for type_uri in ${RELEASE_TYPE_URI[@]}
+				do
+					ada_binary_tmp=""
+					ada_source_tmp=""
+					for component in ${REPOSITORIES_COMPONENTS[@]}
+					do
+						
+						local ketemu=0
+						local check_bar_i=$(($(tput cols)/$check_count))
+						
+						# Bila nol.
+						if [ $check_bar_i -eq 0 ];then
+							check_bar_i=1;
+						fi
+						
+						# Memeriksa.
+						local cek_lajur=${url}dists/${type_uri}/${component}/${CHECK_ARCH}
+						if curl --output /dev/null --silent --connect-timeout $TIMED_OUT --max-time $TIMED_OUT --head --fail "$cek_lajur"
+						then
+							local ada_binary_tmp="$ada_binary_tmp $component"
+							local ketemu=1
+						fi
+						
+						local cek_lajur=${url}dists/${type_uri}/${component}/${CHECK_SOURCE}
+						if curl --output /dev/null --silent --connect-timeout $TIMED_OUT --max-time $TIMED_OUT --head --fail "$cek_lajur"
+						then
+							local ada_source_tmp="$ada_source_tmp $component"
+							local ketemu=1
+						fi
+						
+						
+						# Penutup
+						echo_ne "\r"
+						if [ $ketemu -eq 1 ];then
+							local status="Berhasil ${component}."
+						else
+							local status="Gagal ${component}."
+						fi
+						local status_len=${#status}
+						
+						# echo $status_len;exit 1;
+						
+						# Menampilkan perkembangan.
+						local check_i=$(($check_i + 1))
+						echo_ne "\r"
+						local tampak=$((($check_bar_i * $check_i) - ($PROG_LEN + ($check_count_len*2) + 3 + $status_len)))
+						
+						# Tampil batang
+						echo_ne "$PROG_ ["
+						echo_1l "=" $tampak
+						echo_ne "-"
+						
+						if [ $tampak -lt 1 ];then tampak=1;fi
+						echo_1l "" $(($(tput cols) - (10 + $status_len + ($check_count_len*2+10) +  $tampak)))
+						echo_ne "] "
+						echo_ne "${status} (${check_i}/${check_count})"
+						
+					done
+					
+					# Bila tidak kosong
+					if [ ! -z "$ada_binary_tmp" ]
+					then
+						local ada="${ada}$PROG_ ${type_uri} -${ada_binary_tmp}\n"
+						local tmp_str="${tmp_str}deb $url ${type_uri}${ada_binary_tmp} # ${domain_name} Binary\n"
+					fi
+					
+					# Bila tidak kosong
+					if [ ! -z "$ada_source_tmp" ]
+					then
+						local ada="${ada}$PROG_ ${type_uri} (Source) -${ada_source_tmp}\n"
+						local tmp_str="${tmp_str}deb-src $url ${type_uri}${ada_source_tmp} # ${domain_name} Source\n"
+					fi
+					
+					if [ ! -z "$ada_tmp" ] || [ ! -z "$ada_source_tmp" ]
+					then
+						local tmp_str="${tmp_str}\n"
+					fi
+				done
+				
+				# Tampil batang untuk kosong
+				echo_ne "\r"
+				echo_1l "" $(tput cols)
+				echo_ne "\r"
+				
+				# Bila ada
+				echo_ne "${ada}"
+				if [ ! -z "$tmp_str" ]
+				then
+					echo "# ===== $domain_name =====" >> $tmp_test
+					echo "" >> $tmp_test
+					echo -ne "$tmp_str" >> $tmp_test
+				else
+					echo_w "URL gagal periksa: $url"
+				fi
+				# echo_ne "\n"
+				
+			else
+				echo_w "URL tidak tersedia: $url$CHECK_RELEASE"
+			fi
+		done < $TMP_FILE
+		
+		sleep 3s
+		
+		# Membuang galat.
+		cat $tmp_test > $TMP_FILE
+		
+		# Selesai.
+		rm $tmp_test -rf
+	fi
+}
+
+# Membangun daftar repositori.
+do_builtrepo(){
+	do_testrepo
+	echo_n "Membangun repositori."
+	local tmp_test=$(mktemp -t "repobuilt_repo_XXXXXXXXXXX")
+	echo "# Dibangun menggunakan $PROG" >> $tmp_test
+	echo "# oleh Bayu Aditya H. <b@yuah.web.id>" >> $tmp_test
+	echo "# pada $(date +%c)" >> $tmp_test
+	echo "" >> $tmp_test
+	
+	local check_i=0
+	while IFS=, read baris
+	do
+		# Memasukkan baris.
+		echo "${baris}" >> $tmp_test
+		
+		# Menunjukkan jumlah baris yang telah selesai.
+		local check_i=$(($check_i + 1))
+		echo_ne "\r"
+		echo_ne "$PROG_ Menyelesaikan ${check_i} baris."
+		
+	done < $TMP_FILE
+	echo "# ===== Akhir Berkas =====" >> $tmp_test
+	
+	sleep 3s
+	
+	# Membuang galat.
+	cat $tmp_test > $TMP_FILE
+	
+	# Selesai.
+	rm $tmp_test -rf
+}
+
+# Menyimpan.
+do_save(){
+	echo_n "Menyimpan ke '${OUT_FILE}'..."
+	cat $TMP_FILE > $OUT_FILE
+	echo_n "Selesai menyimpan ke berkas '${OUT_FILE}'."
+}
+
+# Menampilkan.
+do_preview(){
+	echo_n "Menampilkan hasil..."
+	cat $TMP_FILE
+	echo_n "Selesai Menampilkan."
+	echo_n "Dapat disimpan di '$OUT_FILE'."
+}
+
+# Fungsi utama.
+do_main() {
+	
+	# Awal eksekusi.
+	START=$(date +%s.%6N)
+	START_INT=$(date +%s)
+	
+	if [ $QUIET -ne 1 ]
+	then
+		echo "$PROG"
+		echo "Pembuat daftar repositori Ubuntu."
+		echo "Oleh Bayu Aditya H. <b@yuah.web.id>"
+		echo "==================================="
+	fi
+	
+	if [ $TEST -eq 1 ]
+	then
+		echo_w "Hanya tes. Berkas tidak disimpan."
+	fi
+	
+	# Membuat berkas sementara.
+	do_mktmp;
+	
+	# Mendapatkan daftar.
+	do_getlist
+	
+	# Membangun daftar.
+	do_builtrepo
+	
+	# Apakah tes.
+	if [ $TEST -ne 1 ]
+	then
+		# Menyimpan hasil.
+		do_save
+	else
+		# Menampilkan hasil.
+		do_preview
+	fi
+	
+	# Hapus berkas sementara.
+	do_rmtmp;
+	
+	# Waktu akhir.
+	END=$(date +%s.%6N)
+	END_INT=$(date +%s)
+	DIFF=$(echo "scale=6;$END-$START" | bc | awk '{printf "%f", $0}')
+	DIFF_INT=$(($END_INT-$START_INT))
+	echo_ne "Selesai untuk pada $(date) dalam "
+	show_time $DIFF_INT
+	echo_ne "(${DIFF} detik)\n"
+}
+
+# Memecah argumen.
+if [[ -z "$1" ]]
+then
+	do_main
+	exit 0
+elif [[ "$1" =~ ^((-{1,2})([Hh]$|[Hh][Ee][Ll][Pp])|)$ ]];
+then
+	do_help
+	exit 1
+else
+	args=($@)
+	arg_skip=0;i=-1
+	for opt in ${args[@]}
+	do
+		# Menaik.
+		i=$(($i+1))
+		
+		# Selanjutnya.
+		next_arg=${@:$((i+2)):1}
+		prev_arg=${@:$((i)):1}
+		
+		# Bila dilewati.
+		if [ "$arg_skip" -eq 1 ]
+		then
+			if [[ "$opt" =~ ^-{1,2}.* ]]
+			then
+				# echo -n "$opt";
+				echo_w "Argumen untuk '${prev_arg}' kosong. Silakan periksa perintah Anda." 
+			else
+				arg_skip=0;
+				continue;
+			fi
+		fi
+		case "$opt" in
+		"-q"|"--quiet")
+			QUIET="1";
+			;;
+		"-t"|"--test")
+			TEST="1";
+			;;
+		"-h"|"--help")
+			do_help;
+			;;
+		"-p"|"--proposal")
+			do_help_proposal;
+			;;
+		"-v"|"--version")
+			do_show_version;
+			;;
+		"-o"|"--outfile")
+			OUT_FILE=$next_arg;
+			arg_skip=1;
+			;;
+		"-T"|"--timedout")
+			TIMED_OUT=$next_arg;
+			arg_skip=1;
+			;;
+		*)
+			echo_e "Argemen salah: '${opt}'" >&2
+			echo_n "Gunakan --help untuk bantuan."
+			exit 1
+		esac
+	done
+fi
+
+do_main
