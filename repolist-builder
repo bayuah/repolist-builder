@@ -419,7 +419,7 @@ do_testrepo(){
 						echo_ne "-"
 						
 						if [ $tampak -lt 1 ];then tampak=1;fi
-						echo_1l "" $(($(tput cols) - (10 + $status_len + ($check_count_len*2+10) +  $tampak)))
+						echo_1l "" $(($(tput cols) - (10 + $status_len + ($check_count_len * 2 + 20) +  $tampak)))
 						echo_ne "] "
 						echo_ne "${status} (${check_i}/${check_count})"
 						
